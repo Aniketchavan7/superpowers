@@ -179,6 +179,15 @@ const _cacheChildSession = (sessionID, isChild) => {
   _childSessionCache.set(sessionID, isChild);
 };
 
+const isInternalPrompt = (text) => {
+  if (typeof text !== 'string') return false;
+  return (
+    text.startsWith('mc:hidden') ||
+    text.includes('"magic_context":"hidden-run"') ||
+    text.includes('"magic_context": "hidden-run"')
+  );
+};
+
 const isChildSession = async (fetchSession, sessionID) => {
   if (!sessionID) return false; // unknown session: keep current behavior
   if (_childSessionCache.has(sessionID)) return _childSessionCache.get(sessionID);
@@ -203,7 +212,21 @@ const isChildSession = async (fetchSession, sessionID) => {
         (typeof session.parentID !== 'string' || session.parentID.length === 0)) {
       throw new Error('Session lookup returned an invalid parent identity');
     }
-    isChild = session.parentID !== undefined;
+    // #2160 & #2713: classify as child/internal if session has an explicit parent,
+    // or if it is marked as a Magic Context hidden run / internal maintenance run.
+    const hasParent = session.parentID !== undefined;
+    const isInternal = Boolean(
+      session.internal ||
+      session.metadata?.internal ||
+      session.metadata?.background ||
+      session.metadata?.hidden ||
+      session.metadata?.magic_context === 'hidden-run' ||
+      session.metadata?.['magic-context'] === 'hidden-run' ||
+      session.meta?.magic_context === 'hidden-run' ||
+      session.agent === 'historian' ||
+      session.agent === 'dreamer'
+    );
+    isChild = hasParent || isInternal;
   } catch (err) {
     // Fail open: on lookup errors keep injecting (previous behavior) and do
     // not cache, so a transient failure can recover on the next step.
@@ -254,6 +277,9 @@ export const SuperpowersPlugin = async ({ client, directory }) => {
 
       // Guard: skip if first user message already contains bootstrap.
       if (firstUser.parts.some(p => p.type === 'text' && p.text.startsWith(BOOTSTRAP_MARKER))) return;
+
+      // Guard: skip if first user message is an internal/hidden run prompt (e.g. Magic Context #2713).
+      if (firstUser.parts.some(p => p.type === 'text' && isInternalPrompt(p.text))) return;
 
       // #2160: never restart the controller workflow inside task subagent
       // (child) sessions. V1 passes no input to this hook (verified in the
@@ -361,6 +387,9 @@ async function setup(ctx) {
       const firstUser = event.messages.find(m => m.role === 'user');
       if (firstUser && (!firstUser.content || !firstUser.content.length)) return;
       if (firstUser?.content.some(p => p.type === 'text' && p.text && p.text.startsWith(BOOTSTRAP_MARKER))) return;
+
+      // Guard: skip if first user message is an internal/hidden run prompt (e.g. Magic Context #2713).
+      if (firstUser?.content.some(p => p.type === 'text' && p.text && isInternalPrompt(p.text))) return;
 
       // #2160: the request event carries the sessionID directly. Skip the
       // controller bootstrap when this prompt belongs to a task subagent

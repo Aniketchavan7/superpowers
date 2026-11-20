@@ -61,6 +61,11 @@ for (const flavor of ['v1', 'v2']) {
     ['root', {}, 1],
     ['child', { parentID: 'parent' }, 0],
     ['fork', { fork: { sessionID: 'origin' } }, 1],
+    ['magic-context-hidden-run', { metadata: { magic_context: 'hidden-run' } }, 0],
+    ['magic-context-historian', { agent: 'historian' }, 0],
+    ['magic-context-dreamer', { agent: 'dreamer' }, 0],
+    ['internal-session', { internal: true }, 0],
+    ['background-session', { metadata: { background: true } }, 0],
   ]) {
     const id = `${flavor}-${kind}`;
     const h = await makeHarness(flavor, () => reply(flavor, { id, ...extra }));
@@ -149,6 +154,21 @@ for (const flavor of ['v1', 'v2']) {
   assert.equal(bootstrapCount(probe), 1, `${flavor}: prompt mentioning the tag still gets bootstrap`);
   await mentions.invoke(probe);
   assert.equal(bootstrapCount(probe), 1, `${flavor}: prompt mentioning the tag, repeated event`);
+
+  // #2713: Magic Context hidden-run prompt marker must not receive bootstrap injection
+  const mcHiddenPrompt = await makeHarness(flavor, (id) => reply(flavor, { id }));
+  const mcEvent = makeEvent(flavor, `${flavor}-mc-hidden`);
+  (mcEvent.messages[0].parts ?? mcEvent.messages[0].content)[0].text =
+    'mc:hidden-run:historian:1234';
+  await mcHiddenPrompt.invoke(mcEvent);
+  assert.equal(bootstrapCount(mcEvent), 0, `${flavor}: mc:hidden prompt marker skips bootstrap`);
+
+  const mcJsonPrompt = await makeHarness(flavor, (id) => reply(flavor, { id }));
+  const mcJsonEvent = makeEvent(flavor, `${flavor}-mc-json`);
+  (mcJsonEvent.messages[0].parts ?? mcJsonEvent.messages[0].content)[0].text =
+    '{"magic_context":"hidden-run","role":"historian"}';
+  await mcJsonPrompt.invoke(mcJsonEvent);
+  assert.equal(bootstrapCount(mcJsonEvent), 0, `${flavor}: json magic_context prompt marker skips bootstrap`);
 }
 
 function compactedEvent(sessionID) {
